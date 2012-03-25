@@ -1,0 +1,229 @@
+/*
+ *  
+ *  BFME Palantir Video Converter
+ *  Documentation.txt - program and file format documentation
+ *  Copyright (C) 2011  Philippe Baumann <phil@revora.net>
+ *
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *  
+ */
+
+
+#################################
+# +---------------------------+ #
+# | SOURCE CODE DOCUMENTATION | #
+# +---------------------------+ #
+#################################
+
+
+
+This file provides a general explanation on the file formats used by EA's video files in the Battle for Middle-earth series and a short overview of how the BFME Palantir Video Converter works.
+
+
+
+
+
+A word on digital video file formats
+------------------------------------
+
+Digital video file formats split the video into single images, called frames. These frames are then read and played in a rapid sequence to create the impression of a moving video.
+
+Many video codecs use the technique of key frames and delta frames to compress the amount of data needed to represent this video. A key frame is a single image of the whole scene in a video. A delta frame, however, only contains the parts of the image that have changed from the last frame. This way you can save a lot of space for the resulting file. Imagine a scene of two people talking, where the background remains absolutely static. In a delta frame you only need to store the part of the image where the moving face is located and can ignore the static background. In order to create a stable video, there will be a new key frame every n delta frames.
+
+
+
+
+
+EA's VP6 (EAVP6A) file structure
+--------------------------------
+
+The standard EAVP6 file uses a structure very similar to that of the AVI container format. To understand EAVP6, you first need to understand how a basic AVI file looks like. An AVI file is split into chunks or blocks with the following basic layout (pseudo-code).
+
+typedef struct 
+{
+  char id[4];				// 4-byte ASCII character ID that describes the block
+  uint32 datalength;		// 4-byte, little-endian, unsigned integer describing the length of the following data part, in bytes
+  char data[datalength];	// actual data, of arbitrary length
+} AVIBlock;
+
+The format of the data part for blocks that hold the actual video data depends on the codec used.
+
+
+
+The EAVP6 format uses the same kind of blocks, with one difference: Contrary to the AVI blocks, the "length" field describes the length of the whole block and not just the following data part. In other words, an EAVP6 block's length field will always be 8 (bytes) more than the corresponding AVI block.
+
+typedef struct 
+{
+  char id[4];				// 4-byte ASCII character ID that describes the block
+  uint32 blocklength;		// 4-byte, little-endian, unsigned integer describing the length of the whole block, in bytes
+  char data[blocklength-8];	// actual data, of arbitrary length
+} EAVP6Block;
+
+
+
+The EAVP6 format has the following three types of blocks:
+
+- MVhd: The video file header, a special block
+- MV0K: video key frame block
+- MV0F: video delta frame block
+
+The basic order of the blocks is:
+1. MVhd
+2. MV0K #1
+3. MV0F #1
+4. MV0F #2
+5. MV0F #3
+6. ...
+v. MV0F #n
+w. MV0K #2
+x. MV0F #n+1
+y. MV0F #n+2
+z. ...
+
+
+The header block (MVhd) contains information about the whole video. It is always 32 bytes long and its structure is (pseudo-code):
+
+//
+// MVhdBlock
+//
+typedef struct
+{
+  char id[4];					// always 'MVhd'
+  uint32 blocklength;			// always 32
+  char codec[4];				// always 'vp60'
+  uint16 Width;					// video width in pixels
+  uint16 Height;				// video height in pixels
+  uint32 TotalFrames;			// total number of frames in the video
+  uint32 SuggestedBufferSize;	// suggested buffer size = size of largest frame
+  uint32 Rate;
+  uint32 Scale;
+} MVhdBlock;
+
+(All values are stored in little-endian)
+
+
+The MV0K and MV0F blocks have the following layout (pseudo-code):
+
+//
+// MV0KBlock, MV0FBlock
+//
+typedef struct 
+{
+  char id[4]; // 'MV0K' or 'MV0F'
+  uint32 blocklength;
+  char videodata[blocklength-8]; // id and blocklength vars already use 8 bytes
+} MV0KBlock, MV0FBlock;
+
+
+
+
+
+EA's VP6 with alpha channel (EAVP6A) file structure
+---------------------------------------------------
+
+In order to use partly transparent videos, EA's VP6 with alpha format includes a second frame ("alpha frame") for every single video frame. This alpha frame holds the alpha channel, the information about which parts of the video should be transparent. Same as with the regular frames, there are alpha key frames and alpha delta frames. Note that the alpha key frames and regular key frames don't align - they are completely separate.
+
+An EAVP6A file has the following types of blocks:
+
+- AVP6: A marker block that indicates it is an EAVP6A file
+- MVhd: The video file header, a special block
+- AVhd: The alpha file header, an exact copy of the MVhd block except for the id
+- MV0K: video key frame block
+- MV0F: video delta frame block
+- AV0K: alpha key frame block
+- AV0F: alpha delta frame block
+
+The basic order of the blocks is:
+ 1. AVP6
+ 2. MVhd
+ 3. AVhd
+ 4. AV0K #1
+ 5. MV0K #1
+ 6. AV0F #1
+ 7. MV0F #1
+ 8. AV0F #2
+ 9. MV0F #2
+10. ...
+ t. AV0F #n
+ u. MV0F #m
+ v. AV0K #2
+ w. MV0F #m+1
+ x. AV0F #n+1
+ y. MV0F #m+2
+ z. ...
+
+As noted earlier, the key frames of the alpha frames and the regular frames are not aligned.
+
+
+Now for the structure of the different EAVP6A blocks:
+
+//
+// AVP6Block
+//
+typedef struct
+{
+  char id[4]; 		// 'AVP6'
+  uint32 blocklength; // 8
+} AVP6Block;
+
+//
+// MVhdBlock, AVhdBlock
+//
+typedef struct
+{
+  char id[4];					// always 'MVhd' or 'AVhd'
+  uint32 blocklength;			// always 32
+  char codec[4];				// always 'vp61'
+  uint16 Width;					// video width in pixels
+  uint16 Height;				// video height in pixels
+  uint32 TotalFrames;			// total number of frames in the video
+  uint32 SuggestedBufferSize;	// suggested buffer size = size of largest frame
+  uint32 Rate;
+  uint32 Scale;
+} MVhdBlock, AVhdBlock;
+
+
+The AV0K and AV0F frames have the identical structure as MV0K and MV0F, except for the ids:
+
+//
+// AV0KBlock, AV0FBlock, MV0KBlock, MV0FBlock
+//
+typedef struct 
+{
+  char id[4]; // 'AV0K', 'AV0F', 'MV0K', or 'MV0F'
+  uint32 blocklength;
+  char videodata[blocklength-8]; // id and blocklength vars already use 8 bytes
+} AV0KBlock, AV0FBlock, MV0KBlock, MV0FBlock;
+
+
+
+
+
+How this tool works
+-------------------
+
+What this tool does is read all the blocks from a EAVP6 file step by step, inject an alpha frame for every regular frame in the source file and then write that to the output file. The alpha frames are based on a number of previously extracted, unique alpha frames that are stored byte-for-byte in AlphaChannelFrames.h.
+
+The process is:
+
+1. Check for sufficient program arguments
+2. Check if input file exists and is readable
+3. Check if output file exists and ask for confirmation to overwrite if it does
+4. Open the output file for writing
+5. Check if the input file actually starts with an MVhd id (method checkInFile())
+6. Read total number of frames in the input file from the MVhd block (method readTotalFramesCount())
+7. Write the EAVP6A headers to the output file by copying the MVhd info from the input file (method writeHeaders())
+8. Display a message
+9. Loop through all the frames, figure out which alpha frame to write, write it to the output file, read regular frame from intput file, then write that to the output file
+10. Display a message with statistics and close the files
